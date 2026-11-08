@@ -101,8 +101,8 @@ internal class EntropyCollector(randomBytes: ByteArray) {
 
     companion object {
         const val RANDOM_BYTES = 4096
-        const val FRAME_WIDTH = 240
-        const val FRAME_HEIGHT = 320
+        const val FRAME_WIDTH = 480
+        const val FRAME_HEIGHT = 640
         const val CAMERA_FRAMES = 3
         const val HASH_BYTES = 32
         const val MIN_DRAW_MOVEMENTS = 12
