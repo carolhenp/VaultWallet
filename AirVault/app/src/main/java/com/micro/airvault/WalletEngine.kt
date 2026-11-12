@@ -1,6 +1,7 @@
 package com.micro.airvault
 
 import org.json.JSONObject
+import com.micro.airprotocol.BitcoinAddressType
 import org.web3j.crypto.Bip32ECKeyPair
 import org.web3j.crypto.Credentials
 import org.web3j.crypto.Keys
@@ -19,7 +20,8 @@ sealed interface SigningRequest {
         val payload: String,
         val previousTransactions: List<String> = emptyList(),
         val review: List<Pair<String, String>>,
-        val warning: String = ""
+        val warning: String = "",
+        val bitcoinAddressType: BitcoinAddressType? = null
     ) : SigningRequest
     data class Transaction(
         val chainId: Long,
@@ -56,7 +58,7 @@ object WalletEngine {
             require(entropy.size == 32) { "助记词熵长度无效" }
             MnemonicUtils.generateMnemonic(entropy)
         } finally {
-            entropy.fill(0)
+            SodiumMemory.wipe(entropy)
         }
     }
 
@@ -69,8 +71,8 @@ object WalletEngine {
 
     fun address(mnemonic: String): String = address(mnemonic, WalletChain.ETHEREUM)
 
-    internal fun address(mnemonic: String, chain: WalletChain): String = when (chain) {
-        WalletChain.BITCOIN, WalletChain.SOLANA, WalletChain.TRON -> NonEvmWallet.address(mnemonic, chain)
+    internal fun address(mnemonic: String, chain: WalletChain, bitcoinType: BitcoinAddressType = BitcoinAddressType.SEGWIT): String = when (chain) {
+        WalletChain.BITCOIN, WalletChain.SOLANA, WalletChain.TRON, WalletChain.ZCASH -> NonEvmWallet.address(mnemonic, chain, bitcoinType)
         else -> credentials(mnemonic).address
     }
 
@@ -79,6 +81,33 @@ object WalletEngine {
         return WalletChain.entries.associateWith { chain ->
             if (chain.isEvm) evmAddress else address(mnemonic, chain)
         }
+    }
+
+    internal fun publicKeys(mnemonic: String): Map<WalletChain, ByteArray> {
+        val evm = Numeric.toBytesPadded(credentials(mnemonic).ecKeyPair.publicKey, 64)
+        return WalletChain.entries.associateWith { chain ->
+            if (chain.isEvm) evm.copyOf() else NonEvmWallet.publicKey(mnemonic, chain)
+        }
+    }
+
+    internal data class BitcoinPublicAccount(val address: String, val publicKey: ByteArray)
+    internal data class PublicData(
+        val addresses: Map<WalletChain, String>,
+        val publicKeys: Map<WalletChain, ByteArray>,
+        val bitcoinAccounts: Map<BitcoinAddressType, BitcoinPublicAccount>,
+        val catalog: WalletPublicCatalog
+    )
+
+    internal fun publicData(mnemonic: String, bitcoinType: BitcoinAddressType, customChains: List<CustomChain> = emptyList()): PublicData {
+        val catalog = WalletPublicCatalog.derive(mnemonic, customChains)
+        val bitcoin = BitcoinAddressType.entries.associateWith { type ->
+            val derived = catalog.address(WalletAccount(WalletChain.BITCOIN, type))
+            BitcoinPublicAccount(derived.address, derived.publicKey)
+        }
+        val accounts = WalletChain.entries.associateWith { chain ->
+            catalog.address(WalletAccount(chain, if (chain == WalletChain.BITCOIN) bitcoinType else null))
+        }
+        return PublicData(accounts.mapValues { it.value.address }, accounts.mapValues { it.value.publicKey }, bitcoin, catalog)
     }
 
     fun parseRequest(input: String): SigningRequest {
@@ -134,9 +163,10 @@ object WalletEngine {
 
     fun sign(request: SigningRequest, mnemonic: String): String = sign(request, mnemonic, WalletChain.ETHEREUM)
 
-    internal fun sign(request: SigningRequest, mnemonic: String, chain: WalletChain): String {
+    internal fun sign(request: SigningRequest, mnemonic: String, chain: WalletChain,
+                      bitcoinType: BitcoinAddressType = BitcoinAddressType.SEGWIT): String {
         requireChain(request, chain)
-        if (request is SigningRequest.ChainTransaction) return NonEvmWallet.sign(request, mnemonic)
+        if (request is SigningRequest.ChainTransaction) return NonEvmWallet.sign(request, mnemonic, bitcoinType)
         val credentials = credentials(mnemonic)
         val result = JSONObject().put("from", credentials.address)
         when (request) {
@@ -182,7 +212,7 @@ object WalletEngine {
             val master = Bip32ECKeyPair.generateKeyPair(seed)
             Credentials.create(Bip32ECKeyPair.deriveKeyPair(master, derivationPath))
         } finally {
-            seed.fill(0)
+            SodiumMemory.wipe(seed)
         }
     }
 
@@ -197,7 +227,7 @@ object WalletEngine {
             )
             Numeric.toBytesPadded(Bip32ECKeyPair.deriveKeyPair(Bip32ECKeyPair.generateKeyPair(seed), path).privateKey, 32)
         } finally {
-            seed.fill(0)
+            SodiumMemory.wipe(seed)
         }
     }
 

@@ -10,149 +10,104 @@ import java.nio.ByteBuffer
 import java.security.MessageDigest
 
 class EntropyCollectorTest {
-    private data class GyroSample(val timestamp: Long, val x: Float, val y: Float, val z: Float)
+    private val drawing = (0..EntropyCollector.MIN_DRAW_MOVEMENTS).map {
+        DrawSample(it.toFloat(), (it * 2).toFloat(), 1000L + it, it == 0)
+    }
 
     @Test
-    fun hashesSourcesInCaptureOrderAndGeneratesTwentyFourWords() {
+    fun streamsRawSourcesIntoOneSha3DigestAndClearsInputs() {
         val random = ByteArray(EntropyCollector.RANDOM_BYTES) { it.toByte() }
-        val expectedHashes = mutableListOf(sha3(random))
+        val expected = MessageDigest.getInstance("SHA3-256")
+        expected.update(random)
         val collector = EntropyCollector(random)
-        assertArrayEquals(ByteArray(random.size), random)
-
-        repeat(EntropyCollector.CAMERA_FRAMES) { index ->
-            val frame = ByteArray(EntropyCollector.FRAME_WIDTH * EntropyCollector.FRAME_HEIGHT) {
-                (it + index).toByte()
-            }
-            expectedHashes += sha3(frame)
-            collector.addCameraFrame(frame)
-            assertArrayEquals(ByteArray(frame.size), frame)
-            assertEquals(index + 1, collector.cameraFrames)
+        repeat(3) { index ->
+            val photo = ByteArray(100 + index) { (it + index).toByte() }
+            expected.update(photo)
+            collector.addCameraPhoto(CameraSide.BACK, photo)
+            assertArrayEquals(ByteArray(photo.size), photo)
         }
-
-        val gyroscope = GyroscopeEntropy()
-        val startedAt = 1_000_000_000L
-        gyroscope.begin(startedAt)
-        val gyroSamples = (1..12).map { index ->
-            GyroSample(startedAt + index * 200_000_000L, index.toFloat(), (index * 2).toFloat(), (-index).toFloat())
+        repeat(3) { index ->
+            val photo = ByteArray(70 + index) { (it * 2 + index).toByte() }
+            expected.update(photo)
+            collector.addCameraPhoto(CameraSide.FRONT, photo)
         }
-        gyroSamples.forEach { sample ->
-            gyroscope.addSample(sample.timestamp, sample.x, sample.y, sample.z)
-        }
-        gyroscope.end(startedAt + 3_000_000_000L)
-        val gyroscopeDigest = gyroscope.finish()
-        val gyroHash = MessageDigest.getInstance("SHA3-256")
-        gyroSamples.forEach { sample ->
-            gyroHash.update(ByteBuffer.allocate(20)
-                .putLong(sample.timestamp)
-                .putInt(sample.x.toBits())
-                .putInt(sample.y.toBits())
-                .putInt(sample.z.toBits())
-                .array())
-        }
-        assertArrayEquals(gyroHash.digest(), gyroscopeDigest)
-        expectedHashes += gyroscopeDigest.copyOf()
-        collector.addGyroscopeDigest(gyroscopeDigest)
-        assertArrayEquals(ByteArray(32), gyroscopeDigest)
-
-        val microphoneBytes = ByteArray(96_000) { (it * 3).toByte() }
-        val microphoneDigest = sha3(microphoneBytes)
-        expectedHashes += microphoneDigest.copyOf()
-        collector.addMicrophoneDigest(microphoneDigest)
-        assertArrayEquals(ByteArray(32), microphoneDigest)
-
-        val drawing = (0..20).map { index ->
-            DrawSample(index.toFloat(), (index * 2).toFloat(), 1000L + index, index == 0)
-        }
-        val drawingDigest = MessageDigest.getInstance("SHA3-256")
+        val microphone = ByteArray(EntropyCollector.MICROPHONE_BYTES) { (it * 3).toByte() }
+        expected.update(microphone)
+        collector.addMicrophoneData(microphone)
+        val gyroscope = ByteArray(120) { (it * 7).toByte() }
+        expected.update(gyroscope)
+        collector.addGyroscopeData(gyroscope)
+        assertTrue(collector.ready)
         drawing.forEach { sample ->
-            drawingDigest.update(ByteBuffer.allocate(17)
-                .putInt(sample.x.toBits())
-                .putInt(sample.y.toBits())
-                .putLong(sample.timeNanos)
-                .put(if (sample.startsStroke) 1.toByte() else 0.toByte())
-                .array())
+            expected.update(ByteBuffer.allocate(17).putInt(sample.x.toBits()).putInt(sample.y.toBits())
+                .putLong(sample.timeNanos).put(if (sample.startsStroke) 1 else 0).array())
         }
-        expectedHashes += drawingDigest.digest()
-        val expected = sha3(expectedHashes.reduce { combined, next -> combined + next })
-
         val result = collector.finish(drawing)
-        assertArrayEquals(expected, result)
+        assertArrayEquals(expected.digest(), result)
         assertEquals(24, WalletEngine.generateMnemonic(result).split(' ').size)
-        assertArrayEquals(ByteArray(32), result)
+        assertArrayEquals(ByteArray(random.size), random)
+        assertArrayEquals(ByteArray(microphone.size), microphone)
+        assertArrayEquals(ByteArray(gyroscope.size), gyroscope)
         assertThrows(IllegalStateException::class.java) { collector.finish(drawing) }
     }
 
     @Test
-    fun refusesIncompleteCollection() {
+    fun needsAllSixPhotosAndAudioButAllowsMissingGyroscope() {
         val collector = EntropyCollector(ByteArray(EntropyCollector.RANDOM_BYTES))
-        val microphoneDigest = ByteArray(32)
-        assertThrows(IllegalStateException::class.java) { collector.addMicrophoneDigest(microphoneDigest) }
-        repeat(EntropyCollector.CAMERA_FRAMES) {
-            collector.addCameraFrame(ByteArray(EntropyCollector.FRAME_WIDTH * EntropyCollector.FRAME_HEIGHT))
-        }
-        assertThrows(IllegalStateException::class.java) { collector.addMicrophoneDigest(ByteArray(32)) }
-        assertThrows(IllegalStateException::class.java) {
-            collector.finish((0..20).map { DrawSample(it.toFloat(), it.toFloat(), it.toLong(), it == 0) })
-        }
-        collector.clear()
+        repeat(3) { collector.addCameraPhoto(CameraSide.BACK, byteArrayOf(it.toByte())) }
+        repeat(2) { collector.addCameraPhoto(CameraSide.FRONT, byteArrayOf(it.toByte())) }
+        collector.addMicrophoneData(ByteArray(EntropyCollector.MICROPHONE_BYTES))
+        collector.addGyroscopeData(null)
+        assertFalse(collector.ready)
+        assertThrows(IllegalStateException::class.java) { collector.finish(drawing) }
+        collector.addCameraPhoto(CameraSide.FRONT, byteArrayOf(3))
+        assertTrue(collector.ready)
+        assertEquals(32, collector.finish(drawing).size)
     }
 
     @Test
-    fun generatesMnemonicWithoutGyroscope() {
-        val random = ByteArray(EntropyCollector.RANDOM_BYTES) { it.toByte() }
-        val expectedHashes = mutableListOf(sha3(random))
-        val collector = EntropyCollector(random)
-        repeat(EntropyCollector.CAMERA_FRAMES) { index ->
-            val frame = ByteArray(EntropyCollector.FRAME_WIDTH * EntropyCollector.FRAME_HEIGHT) { index.toByte() }
-            expectedHashes += sha3(frame)
-            collector.addCameraFrame(frame)
-        }
-        collector.addGyroscopeDigest(null)
-        assertEquals(EntropyCollector.CAMERA_FRAMES, collector.cameraFrames)
-        val microphone = ByteArray(EntropyCollector.HASH_BYTES) { 7 }
-        expectedHashes += microphone.copyOf()
-        collector.addMicrophoneDigest(microphone)
-        val drawing = (0..20).map { index ->
-            DrawSample(index.toFloat(), (index * 2).toFloat(), index.toLong(), index == 0)
-        }
-        val drawingHash = MessageDigest.getInstance("SHA3-256")
-        drawing.forEach { sample ->
-            drawingHash.update(ByteBuffer.allocate(17).putInt(sample.x.toBits())
-                .putInt(sample.y.toBits()).putLong(sample.timeNanos)
-                .put(if (sample.startsStroke) 1 else 0).array())
-        }
-        expectedHashes += drawingHash.digest()
-        val expected = sha3(expectedHashes.reduce { joined, next -> joined + next })
-        val entropy = collector.finish(drawing)
-        assertArrayEquals(expected, entropy)
-        assertEquals(24, WalletEngine.generateMnemonic(entropy).split(' ').size)
-    }
-
-    @Test
-    fun gyroscopeRequiresSamplesWithinCameraWindow() {
+    fun gyroscopeIgnoresStationaryReadingsAndRequiresThousandChanges() {
         val gyroscope = GyroscopeEntropy()
-        gyroscope.begin(1_000_000_000L)
-        gyroscope.addSample(900_000_000L, 1f, 2f, 3f)
-        gyroscope.addSample(1_100_000_000L, 1f, 2f, 3f)
-        gyroscope.end(4_000_000_000L)
-        gyroscope.addSample(4_100_000_000L, 1f, 2f, 3f)
+        val start = 1_000_000_000L
+        gyroscope.begin(start)
+        assertFalse(gyroscope.addSample(start, 0f, 0f, 0f))
+        repeat(1000) { index ->
+            assertFalse(gyroscope.addSample(start + index * 1_000_000L, 0.001f, 0.001f, 0.001f))
+        }
+        assertEquals(0, gyroscope.acceptedSamples)
+        val expected = ByteBuffer.allocate(GyroscopeEntropy.REQUIRED_SAMPLES * 20)
+        repeat(GyroscopeEntropy.REQUIRED_SAMPLES) { index ->
+            val time = start + (index + 1) * 5_000_000L
+            val x = if (index % 2 == 0) 0.2f else -0.2f
+            assertTrue(gyroscope.addSample(time, x, 0f, 0f))
+            expected.putLong(time).putInt(x.toBits()).putInt(0f.toBits()).putInt(0f.toBits())
+        }
+        assertEquals(1000, gyroscope.acceptedSamples)
+        assertFalse(gyroscope.addSample(start + 6_000_000_000L, 1f, 0f, 0f))
+        gyroscope.end(start + 5_000_000_000L)
+        assertArrayEquals(expected.array(), gyroscope.finish())
+    }
+
+    @Test
+    fun gyroscopeCannotFinishWithOnlyNoise() {
+        val gyroscope = GyroscopeEntropy()
+        gyroscope.begin(0)
+        gyroscope.addSample(1, 0f, 0f, 0f)
+        repeat(1000) { gyroscope.addSample(it.toLong() + 2, 0.001f, 0f, 0f) }
+        gyroscope.end(5_000_000_000L)
         assertThrows(IllegalArgumentException::class.java) { gyroscope.finish() }
         gyroscope.clear()
     }
 
     @Test
-    fun cameraTakesThreeFramesAtLeastOneSecondApartOverThreeSeconds() {
+    fun cameraTakesThreeFramesOneSecondApart() {
         val schedule = CameraFrameSchedule()
         val start = 1_000_000_000L
         assertFalse(schedule.shouldCapture(start))
         assertFalse(schedule.shouldCapture(start + 999_999_999L))
         assertTrue(schedule.shouldCapture(start + 1_000_000_000L))
-        assertFalse(schedule.shouldCapture(start + 1_500_000_000L))
         assertTrue(schedule.shouldCapture(start + 2_000_000_000L))
-        assertFalse(schedule.shouldCapture(start + 2_500_000_000L))
         assertTrue(schedule.shouldCapture(start + 3_000_000_000L))
         assertFalse(schedule.shouldCapture(start + 4_000_000_000L))
     }
-
-    private fun sha3(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA3-256").digest(bytes)
 }

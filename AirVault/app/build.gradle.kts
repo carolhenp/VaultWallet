@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -33,11 +34,16 @@ android {
     buildFeatures {
         compose = true
     }
+    sourceSets["main"].kotlin.directories.add("../../AirProtocol/src/main/java")
     packaging {
         resources.excludes += "META-INF/DISCLAIMER"
         resources.excludes += "META-INF/FastDoubleParser-LICENSE"
         resources.excludes += "META-INF/LICENSE.md"
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -50,11 +56,17 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.android.sqlcipher)
+    implementation(libs.androidx.sqlite)
+    implementation(libs.androidx.room3.runtime)
+    ksp(libs.androidx.room3.compiler)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
     implementation(libs.bouncycastle.bcprov)
+    implementation("com.sparrowwallet:hummingbird:1.7.6")
+    implementation("co.nstant.in:cbor:0.9")
     implementation(libs.bitcoinj.core) {
         exclude(group = "com.google.protobuf", module = "protobuf-javalite")
         exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
@@ -66,6 +78,10 @@ dependencies {
         exclude(group = "io.netty")
         exclude(group = "com.google.guava")
     }
+    implementation(libs.lazysodium.android) {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+    implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
     implementation(libs.web3j.crypto) {
         exclude(group = "io.vertx")
     }

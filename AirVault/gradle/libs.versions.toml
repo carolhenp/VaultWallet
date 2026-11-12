@@ -15,6 +15,12 @@ bouncycastle = "1.86"
 bitcoinj = "0.17.1"
 sol4k = "0.9.0"
 trident = "1.0.0"
+lazysodium = "5.2.0"
+jna = "5.17.0"
+sqlcipher = "4.20.0"
+sqlite = "2.7.1"
+room3Version = "3.0.3"
+ksp = "2.3.13"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,14 +41,21 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camera" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camera" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camera" }
+androidx-sqlite = {group="androidx.sqlite", name = "sqlite", version.ref = "sqlite"}
+androidx-room3-runtime = { group = "androidx.room3", name = "room3-runtime", version.ref = "room3Version" }
+androidx-room3-compiler = { group = "androidx.room3", name = "room3-compiler", version.ref = "room3Version" }
+
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 web3j-crypto = { group = "org.web3j", name = "crypto", version.ref = "web3j" }
 bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 bitcoinj-core = { group = "org.bitcoinj", name = "bitcoinj-core", version.ref = "bitcoinj" }
 sol4k = { group = "org.sol4k", name = "sol4k", version.ref = "sol4k" }
 tron-trident = { group = "io.github.tronprotocol", name = "trident", version.ref = "trident" }
+lazysodium-android = { group = "com.goterl", name = "lazysodium-android", version.ref = "lazysodium" }
+android-sqlcipher = {group="net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher"}
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 

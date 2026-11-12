@@ -7,65 +7,156 @@ import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import android.util.Base64
+import com.micro.airprotocol.BitcoinAddressType
+import java.io.Closeable
 import java.security.KeyStore
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
-class VaultStore(context: Context) {
+class VaultStore internal constructor(
+    context: Context,
+    databaseName: String,
+    derivePassword: () -> ByteArray
+) : Closeable {
+    constructor(context: Context) : this(context, "vault.db", { VaultDatabaseKey().derivePassword() })
+
     private val preferences = context.getSharedPreferences("vault", Context.MODE_PRIVATE)
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    private val databaseFile = context.getDatabasePath(databaseName)
+    private val databaseDelegate = lazy { VaultDatabase.open(context, databaseName, derivePassword) }
+    private val database by databaseDelegate
+    private val initializationMutex = Mutex()
+    private var legacyMigrated = false
+    @Volatile private var closed = false
 
-    val exists: Boolean
-        get() = preferences.contains(CIPHERTEXT) && preferences.contains(IV)
+    private val hasStoredData: Boolean
+        get() = databaseFile.exists() || (preferences.contains(CIPHERTEXT) && preferences.contains(IV))
+
+    private suspend fun dao(): WalletDao = initializationMutex.withLock {
+        check(!closed) { "钱包数据库已关闭" }
+        database.walletDao().also {
+            if (!legacyMigrated) {
+                migrateLegacyWallet(it)
+                legacyMigrated = true
+            }
+        }
+    }
+
+    internal suspend fun wallets(): List<StoredWallet> =
+        if (hasStoredData) dao().wallets() else emptyList()
+
+    internal suspend fun currentWallet(): StoredWallet? =
+        if (hasStoredData) dao().currentWallet() else null
+
+    internal suspend fun customChains(): List<CustomChain> =
+        if (hasStoredData) dao().customChains() else emptyList()
+
+    internal suspend fun addCustomChain(name: String, path: String, format: CustomAddressFormat, chainId: String = ""): CustomChain {
+        val chain = CustomChain(UUID.randomUUID().toString(), CustomChainValidation.name(name),
+            CustomChainValidation.path(path, format), format, System.currentTimeMillis(),
+            CustomChainValidation.chainId(chainId, format))
+        dao().addCustomChain(chain)
+        return chain
+    }
+
+    internal suspend fun defaultWalletName(): String = "钱包${wallets().size + 1}"
+
+    suspend fun exists(): Boolean = currentWallet() != null
+
+    internal suspend fun selectWallet(id: String) {
+        dao().select(id)
+    }
+
+    internal suspend fun setBitcoinAddressType(id: String, type: BitcoinAddressType) {
+        check(dao().setBitcoinAddressType(id, type) == 1) { "钱包不存在" }
+    }
+
+    internal suspend fun renameWallet(id: String, name: String) {
+        val normalizedName = name.trim()
+        require(normalizedName.length in 1..MAX_NAME_LENGTH) { "钱包名称须为 1–30 个字符" }
+        check(dao().rename(id, normalizedName) == 1) { "钱包不存在" }
+    }
 
     fun encryptionCipher(): Cipher = Cipher.getInstance(TRANSFORMATION).apply {
         init(Cipher.ENCRYPT_MODE, getOrCreateKey())
     }
 
-    fun decryptionCipher(): Cipher {
-        val iv = Base64.decode(preferences.getString(IV, null) ?: error("Vault is empty"), Base64.NO_WRAP)
+    suspend fun decryptionCipher(walletId: String): Cipher {
+        val iv = encryptedMnemonic(walletId).second
         return Cipher.getInstance(TRANSFORMATION).apply {
             init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
         }
     }
 
-    fun save(mnemonic: String, authenticatedCipher: Cipher) {
-        val clear = mnemonic.toByteArray(Charsets.UTF_8)
-        try {
-            val encrypted = authenticatedCipher.doFinal(clear)
-            try {
-                check(preferences.edit()
-                    .putString(CIPHERTEXT, Base64.encodeToString(encrypted, Base64.NO_WRAP))
-                    .putString(IV, Base64.encodeToString(authenticatedCipher.iv, Base64.NO_WRAP))
-                    .commit()) { "Could not save vault" }
-            } finally {
-                encrypted.fill(0)
-            }
+    internal suspend fun save(name: String, mnemonic: ProtectedMnemonic, authenticatedCipher: Cipher): StoredWallet {
+        val normalizedName = name.trim()
+        require(normalizedName.isNotEmpty() && normalizedName.length <= MAX_NAME_LENGTH) { "钱包名称须为 1–30 个字符" }
+        val encrypted = mnemonic.withBytes { authenticatedCipher.doFinal(it) }
+        return try {
+            val wallet = StoredWallet(UUID.randomUUID().toString(), normalizedName)
+            dao().save(WalletEntity(wallet.id, wallet.name, encrypted, authenticatedCipher.iv, System.currentTimeMillis()))
+            wallet
         } finally {
-            clear.fill(0)
+            encrypted.fill(0)
         }
     }
 
-    fun decrypt(authenticatedCipher: Cipher): String {
-        val encrypted = Base64.decode(preferences.getString(CIPHERTEXT, null) ?: error("Vault is empty"), Base64.NO_WRAP)
+    internal suspend fun decryptProtected(
+        authenticatedCipher: Cipher,
+        walletId: String? = null
+    ): ProtectedMnemonic {
+        val encrypted = encryptedMnemonic(walletId ?: requireCurrentWalletId()).first
         return try {
             val clear = authenticatedCipher.doFinal(encrypted)
             try {
-                String(clear, Charsets.UTF_8)
+                ProtectedMnemonic.fromBytes(clear)
             } finally {
-                clear.fill(0)
+                SodiumMemory.wipe(clear)
             }
         } finally {
             encrypted.fill(0)
         }
     }
 
-    fun delete() {
-        check(preferences.edit().clear().commit()) { "Could not remove vault" }
-        keyStore.deleteEntry(KEY_ALIAS)
+    suspend fun delete(walletId: String? = null) {
+        dao().delete(walletId ?: requireCurrentWalletId())
+        if (!exists()) keyStore.deleteEntry(KEY_ALIAS)
+    }
+
+    override fun close() {
+        closed = true
+        if (databaseDelegate.isInitialized()) database.close()
+    }
+
+    private suspend fun requireCurrentWalletId(): String = currentWallet()?.id ?: error("尚未创建钱包")
+
+    private suspend fun encryptedMnemonic(walletId: String): Pair<ByteArray, ByteArray> {
+        val wallet = dao().wallet(walletId) ?: error("钱包不存在")
+        return wallet.mnemonic to wallet.iv
+    }
+
+    private suspend fun migrateLegacyWallet(dao: WalletDao) {
+        val encoded = preferences.getString(CIPHERTEXT, null) ?: return
+        val encodedIv = preferences.getString(IV, null) ?: return
+        val encrypted = Base64.decode(encoded, Base64.NO_WRAP)
+        try {
+            dao.migrateLegacy(WalletEntity("legacy-v1", "钱包1", encrypted,
+                Base64.decode(encodedIv, Base64.NO_WRAP), 0L))
+            // Remove the old copy only after Room's migration transaction has committed.
+            withContext(Dispatchers.IO) {
+                check(preferences.edit().remove(CIPHERTEXT).remove(IV).commit()) { "无法完成旧钱包迁移，请重试" }
+            }
+        } finally {
+            encrypted.fill(0)
+        }
     }
 
     private fun getOrCreateKey(): SecretKey {
@@ -110,10 +201,11 @@ class VaultStore(context: Context) {
         return key
     }
 
-    private companion object {
-        const val KEY_ALIAS = "airvault.mnemonic.v1"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val CIPHERTEXT = "ciphertext"
-        const val IV = "iv"
+    companion object {
+        internal const val MAX_NAME_LENGTH = 30
+        private const val KEY_ALIAS = "airvault.mnemonic.v1"
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val CIPHERTEXT = "ciphertext"
+        private const val IV = "iv"
     }
 }

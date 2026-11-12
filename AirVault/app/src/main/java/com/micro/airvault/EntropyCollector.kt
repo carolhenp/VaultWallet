@@ -11,65 +11,60 @@ internal data class DrawSample(
     val startsStroke: Boolean
 )
 
-internal class EntropyCollector(randomBytes: ByteArray) {
-    private val sourceHashes = ArrayList<ByteArray>(7)
-    private var finished = false
-    private var cameraFrameCount = 0
+internal enum class CameraSide { BACK, FRONT }
+
+internal class EntropyCollector(private val randomBytes: ByteArray) {
+    private val backPhotos = ArrayList<ByteArray>(PHOTOS_PER_CAMERA)
+    private val frontPhotos = ArrayList<ByteArray>(PHOTOS_PER_CAMERA)
+    private var microphone: ByteArray? = null
+    private var gyroscope: ByteArray? = null
     private var gyroscopeHandled = false
-    private var microphoneHandled = false
+    private var finished = false
 
-    init {
+    init { require(randomBytes.size == RANDOM_BYTES) { "随机数长度无效" } }
+
+    val backCount: Int get() = backPhotos.size
+    val frontCount: Int get() = frontPhotos.size
+    val ready: Boolean get() = !finished && backCount == PHOTOS_PER_CAMERA &&
+        frontCount == PHOTOS_PER_CAMERA && microphone != null && gyroscopeHandled
+
+    fun addCameraPhoto(side: CameraSide, photo: ByteArray) {
         try {
-            require(randomBytes.size == RANDOM_BYTES) { "随机数长度无效" }
-            sourceHashes += sha3(randomBytes)
-        } finally {
-            randomBytes.fill(0)
-        }
+            check(!finished) { "采集已结束" }
+            require(photo.isNotEmpty()) { "照片数据为空" }
+            val photos = if (side == CameraSide.BACK) backPhotos else frontPhotos
+            check(photos.size < PHOTOS_PER_CAMERA) { "照片数量超出预期" }
+            photos += photo.copyOf()
+        } finally { photo.fill(0) }
     }
 
-    val cameraFrames: Int
-        get() = cameraFrameCount
-
-    fun addCameraFrame(frame: ByteArray) {
+    fun addMicrophoneData(data: ByteArray) {
         try {
-            check(!finished && !gyroscopeHandled && cameraFrameCount < CAMERA_FRAMES) { "相机采集顺序无效" }
-            require(frame.size == FRAME_WIDTH * FRAME_HEIGHT) { "相机帧尺寸无效" }
-            sourceHashes += sha3(frame)
-            cameraFrameCount++
-        } finally {
-            frame.fill(0)
-        }
+            check(!finished && microphone == null) { "麦克风采集顺序无效" }
+            require(data.size == MICROPHONE_BYTES) { "麦克风数据长度无效" }
+            microphone = data.copyOf()
+        } finally { data.fill(0) }
     }
 
-    fun addMicrophoneDigest(digest: ByteArray) {
+    fun addGyroscopeData(data: ByteArray?) {
         try {
-            check(!finished && gyroscopeHandled && !microphoneHandled) { "麦克风采集顺序无效" }
-            require(digest.size == HASH_BYTES) { "麦克风摘要长度无效" }
-            sourceHashes += digest.copyOf()
-            microphoneHandled = true
-        } finally {
-            digest.fill(0)
-        }
-    }
-
-    fun addGyroscopeDigest(digest: ByteArray?) {
-        try {
-            check(!finished && cameraFrameCount == CAMERA_FRAMES && !gyroscopeHandled) { "陀螺仪采集顺序无效" }
-            if (digest != null) {
-                require(digest.size == HASH_BYTES) { "陀螺仪摘要长度无效" }
-                sourceHashes += digest.copyOf()
-            }
+            check(!finished && !gyroscopeHandled) { "陀螺仪采集顺序无效" }
+            gyroscope = data?.copyOf()
             gyroscopeHandled = true
-        } finally {
-            digest?.fill(0)
-        }
+        } finally { data?.fill(0) }
     }
 
     fun finish(drawing: List<DrawSample>): ByteArray {
-        check(!finished && microphoneHandled) { "采集数据不完整" }
+        check(ready) { "采集数据不完整" }
         require(drawing.count { !it.startsStroke } >= MIN_DRAW_MOVEMENTS) { "请继续绘制图形" }
-        val drawingDigest = SHA3Digest(256).let { digest ->
-            val encoded = ByteBuffer.allocate(17)
+        val digest = SHA3Digest(256)
+        val encoded = ByteBuffer.allocate(17)
+        return try {
+            digest.update(randomBytes, 0, randomBytes.size)
+            backPhotos.forEach { digest.update(it, 0, it.size) }
+            frontPhotos.forEach { digest.update(it, 0, it.size) }
+            microphone!!.let { digest.update(it, 0, it.size) }
+            gyroscope?.let { digest.update(it, 0, it.size) }
             drawing.forEach { sample ->
                 encoded.clear()
                 encoded.putInt(sample.x.toBits())
@@ -79,44 +74,36 @@ internal class EntropyCollector(randomBytes: ByteArray) {
                 digest.update(encoded.array(), 0, encoded.position())
             }
             ByteArray(HASH_BYTES).also { digest.doFinal(it, 0) }
-        }
-        sourceHashes += drawingDigest
-        val joined = ByteArray(sourceHashes.size * HASH_BYTES)
-        return try {
-            sourceHashes.forEachIndexed { index, hash ->
-                hash.copyInto(joined, index * HASH_BYTES)
-            }
-            sha3(joined)
         } finally {
-            joined.fill(0)
+            encoded.array().fill(0)
             clear()
         }
     }
 
     fun clear() {
-        sourceHashes.forEach { it.fill(0) }
-        sourceHashes.clear()
+        randomBytes.fill(0)
+        backPhotos.forEach { it.fill(0) }
+        frontPhotos.forEach { it.fill(0) }
+        microphone?.fill(0)
+        gyroscope?.fill(0)
+        backPhotos.clear()
+        frontPhotos.clear()
+        microphone = null
+        gyroscope = null
         finished = true
     }
 
     companion object {
         const val RANDOM_BYTES = 4096
-        const val FRAME_WIDTH = 480
-        const val FRAME_HEIGHT = 640
-        const val CAMERA_FRAMES = 3
+        const val PHOTOS_PER_CAMERA = 3
+        const val MICROPHONE_BYTES = 16_000 * 2 * 5
         const val HASH_BYTES = 32
-        const val MIN_DRAW_MOVEMENTS = 12
+        const val MIN_DRAW_MOVEMENTS = 100
 
         fun create(): EntropyCollector {
             val random = ByteArray(RANDOM_BYTES)
             SecureRandom().nextBytes(random)
             return EntropyCollector(random)
-        }
-
-        private fun sha3(bytes: ByteArray): ByteArray {
-            val digest = SHA3Digest(256)
-            digest.update(bytes, 0, bytes.size)
-            return ByteArray(HASH_BYTES).also { digest.doFinal(it, 0) }
         }
     }
 }

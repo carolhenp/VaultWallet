@@ -7,7 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -38,17 +36,17 @@ import com.micro.airvault.ui.theme.Accent
 import com.micro.airvault.ui.theme.Surface
 
 @Composable
-internal fun EntropyDrawing(onConfirm: (List<DrawSample>) -> Unit) {
+internal fun EntropyDrawing(
+    collectionReady: Boolean,
+    onConfirm: (List<DrawSample>) -> Unit,
+    progress: @Composable (Int) -> Unit
+) {
     val samples = remember { mutableStateListOf<DrawSample>() }
     var confirming by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Row {
-            Icon(Icons.Default.Edit, contentDescription = null, tint = Accent)
-            Spacer(Modifier.width(8.dp))
-            Text("手绘图形")
-        }
+    val movements = samples.count { !it.startsStroke }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Canvas(
-            Modifier.fillMaxWidth().height(330.dp)
+            Modifier.fillMaxWidth().height(260.dp)
                 .background(Surface, RoundedCornerShape(6.dp))
                 .border(1.dp, Accent.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
                 .pointerInput(Unit) {
@@ -70,14 +68,15 @@ internal fun EntropyDrawing(onConfirm: (List<DrawSample>) -> Unit) {
             var path = Path()
             samples.forEach { sample ->
                 if (sample.startsStroke) {
-                    drawPath(path, Accent, style = Stroke(width = 5.dp.toPx()))
+                    drawPath(path, Accent, style = Stroke(width = 3.dp.toPx()))
                     path = Path().apply { moveTo(sample.x, sample.y) }
                 } else {
                     path.lineTo(sample.x, sample.y)
                 }
             }
-            drawPath(path, Accent, style = Stroke(width = 5.dp.toPx()))
+            drawPath(path, Accent, style = Stroke(width = 3.dp.toPx()))
         }
+        progress((movements * 100 / EntropyCollector.MIN_DRAW_MOVEMENTS).coerceAtMost(100))
         OutlinedButton(onClick = { samples.clear() }, enabled = samples.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.DeleteOutline, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -85,7 +84,7 @@ internal fun EntropyDrawing(onConfirm: (List<DrawSample>) -> Unit) {
         }
         Button(
             onClick = { confirming = true },
-            enabled = samples.count { !it.startsStroke } >= EntropyCollector.MIN_DRAW_MOVEMENTS,
+            enabled = collectionReady && movements >= EntropyCollector.MIN_DRAW_MOVEMENTS,
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) {
             Text("完成绘制")

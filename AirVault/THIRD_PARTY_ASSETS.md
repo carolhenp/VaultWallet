@@ -1,10 +1,18 @@
-# Chain Icons
+# Chain and account pairing icons
 
-Chain logo PNG files in `app/src/main/res/drawable-nodpi/` are from the
-[Trust Wallet assets repository](https://github.com/trustwallet/assets/tree/master/blockchains).
-Each `chain_*.png` corresponds to the `blockchains/<name>/info/logo.png` file
-with the same chain name, except `chain_smartchain.png` (BNB Smart Chain) and
-`chain_xdai.png` (Gnosis Chain).
+- `chain_zcash.png` is the Zcash icon from
+  [Trust Wallet assets](https://github.com/trustwallet/assets/blob/master/blockchains/zcash/info/logo.png),
+  under the MIT license reproduced below.
+
+- `pairing_airwallet.webp` copies this workspace's AirWallet launcher icon from
+  `AirWallet/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.webp`.
+- `pairing_metamask.xml` converts the path data and colors of the official
+  [MetaMask fox SVG](https://github.com/MetaMask/metamask-extension/blob/master/app/images/logo/metamask-fox.svg)
+  into an Android vector drawable. MetaMask branding belongs to its respective owner;
+  the icon identifies the compatible application.
+- `pairing_trustwallet.png` is the official Trust Wallet shield from
+  [Trust Wallet assets](https://github.com/trustwallet/assets/blob/master/blockchains/smartchain/assets/0x4B0F1812e5Df2A09796481Ff14017e6005508003/logo.png),
+  under the MIT license reproduced below.
 
 MIT License
 

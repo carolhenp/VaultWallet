@@ -14,6 +14,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -28,7 +29,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -67,7 +70,8 @@ internal fun QrScanner(onResult: (String) -> Unit) {
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
     DisposableEffect(owner, previewView) {
         val active = AtomicBoolean(true)
-        val delivered = AtomicBoolean(false)
+        var lastText = ""
+        var lastTime = 0L
         val executor = Executors.newSingleThreadExecutor()
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
@@ -80,9 +84,12 @@ internal fun QrScanner(onResult: (String) -> Unit) {
                     .build()
                 analysis.setAnalyzer(executor) { image ->
                     try {
-                        if (active.get() && !delivered.get()) {
+                        if (active.get()) {
                             val decoded = decodeQr(image)
-                            if (decoded != null && delivered.compareAndSet(false, true)) {
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            if (decoded != null && (decoded != lastText || now - lastTime > 1200)) {
+                                lastText = decoded
+                                lastTime = now
                                 ContextCompat.getMainExecutor(context).execute { if (active.get()) onResult(decoded) }
                             }
                         }
@@ -103,6 +110,24 @@ internal fun QrScanner(onResult: (String) -> Unit) {
         }
     }
     AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(380.dp))
+}
+
+@Composable
+internal fun QrAnimation(frames: List<String>, description: String, qrModifier: Modifier = Modifier.fillMaxWidth()) {
+    var index by remember(frames) { mutableStateOf(0) }
+    LaunchedEffect(frames) {
+        while (frames.size > 1) {
+            kotlinx.coroutines.delay(700)
+            index = (index + 1) % frames.size
+        }
+    }
+    if (frames.isNotEmpty()) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            QrImage(frames[index], description, qrModifier)
+            if (frames.size > 1) Text("${index + 1} / ${frames.size}")
+        }
+    }
 }
 
 private fun decodeQr(image: ImageProxy): String? {
@@ -143,7 +168,8 @@ internal fun QrImage(value: String, description: String = "签名结果二维码
         Image(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = description,
-            modifier = modifier.background(Color.White, RoundedCornerShape(6.dp)).padding(12.dp)
+            modifier = modifier.background(Color.White, RoundedCornerShape(6.dp)).padding(12.dp),
+            filterQuality = FilterQuality.None
         )
     }
 }

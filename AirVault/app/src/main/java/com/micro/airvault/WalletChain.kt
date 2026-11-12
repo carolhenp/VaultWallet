@@ -19,7 +19,10 @@ enum class WalletChain(
     AVALANCHE("Avalanche C-Chain", "AVAX", 43114, "m/44'/60'/0'/0/0", 18),
     GNOSIS("Gnosis Chain", "xDAI", 100, "m/44'/60'/0'/0/0", 18),
     CRONOS("Cronos", "CRO", 25, "m/44'/60'/0'/0/0", 18),
-    SONIC("Sonic", "S", 146, "m/44'/60'/0'/0/0", 18);
+    SONIC("Sonic", "S", 146, "m/44'/60'/0'/0/0", 18),
+    // Append chains to preserve the AV1 wire ordinals of existing networks.
+    ZCASH("Zcash", "ZEC", null, "m/44'/133'/0'/0/0", 8);
 
     val isEvm: Boolean get() = chainId != null
+    val supportsSigning: Boolean get() = this != ZCASH
 }

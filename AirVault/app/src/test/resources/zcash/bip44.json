@@ -1,0 +1,48 @@
+{
+  "source": "@scure/bip32 1.7.0, @scure/bip39 1.6.0, @noble/hashes 1.8.0",
+  "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+  "vectors": [
+    {
+      "branch": 0,
+      "index": 0,
+      "path": "m/44'/133'/0'/0/0",
+      "publicKey": "03db98d8f87716269ed31879aef19bdadbc869a9ea67729e36332d023b916cbcc9",
+      "address": "t1XVXWCvpMgBvUaed4XDqWtgQgJSu1Ghz7F"
+    },
+    {
+      "branch": 0,
+      "index": 1,
+      "path": "m/44'/133'/0'/0/1",
+      "publicKey": "03a68f202ac4e530cdaf1ff3d508cd55c8866049234f9f1b325338ddeb47d78f9c",
+      "address": "t1aQ2b1XszNVo15BguYLbQGqETBL9QZA8Jq"
+    },
+    {
+      "branch": 0,
+      "index": 99,
+      "path": "m/44'/133'/0'/0/99",
+      "publicKey": "02170f98df2c05de517a2dd40e34b6e6e620a46a4907ddad9b580e90bac21de89d",
+      "address": "t1MvfX6w8rPQwUFtEe8UPPMrkTzqkaqo2Am"
+    },
+    {
+      "branch": 1,
+      "index": 0,
+      "path": "m/44'/133'/0'/1/0",
+      "publicKey": "02779a08b7952e5a18522028afd0f7dde8e98955c4daa6ef47eb2d33441606590d",
+      "address": "t1YF8h4qviS77p36wWdUfe8faw4DXduYZnm"
+    },
+    {
+      "branch": 1,
+      "index": 1,
+      "path": "m/44'/133'/0'/1/1",
+      "publicKey": "034e281beecda79bb13842673e70f2103cace8103367880c05ffe48a12b2bd34fd",
+      "address": "t1gzaKpq64V77ETfV76unnPvvREtm3zmCKm"
+    },
+    {
+      "branch": 1,
+      "index": 99,
+      "path": "m/44'/133'/0'/1/99",
+      "publicKey": "0304faf3738b559fbd36a7023cb8c9a52980ad7ec9160d0aab41abe46fde256eb0",
+      "address": "t1WnBFbNjGxGghqntSQjyxePi3xDUGqLvbx"
+    }
+  ]
+}

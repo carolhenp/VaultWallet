@@ -14,7 +14,7 @@ android {
         minSdk = 28
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -33,6 +33,12 @@ android {
     buildFeatures {
         compose = true
     }
+    sourceSets["main"].kotlin.directories.add("../../AirProtocol/src/main/java")
+    packaging {
+        resources.excludes += "META-INF/LICENSE.md"
+        resources.excludes += "META-INF/DISCLAIMER"
+        resources.excludes += "META-INF/FastDoubleParser-LICENSE"
+    }
 }
 
 dependencies {
@@ -44,7 +50,27 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
+    implementation(libs.web3j.crypto) { exclude(group = "io.vertx") }
+    implementation(libs.bouncycastle.bcprov)
+    implementation(libs.bitcoinj.core) {
+        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+    }
+    implementation(libs.sol4k)
+    implementation(libs.tron.trident) {
+        exclude(group = "io.grpc")
+        exclude(group = "io.vertx")
+        exclude(group = "io.netty")
+        exclude(group = "com.google.guava")
+    }
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -1,14 +1,13 @@
 package com.micro.airvault
 
 import com.google.protobuf.ByteString
+import com.micro.airprotocol.BitcoinAddressType
+import com.micro.airprotocol.BitcoinSupport
+import com.micro.airprotocol.ZcashSupport
 import org.bitcoinj.base.BitcoinNetwork
 import org.bitcoinj.base.Coin
-import org.bitcoinj.base.ScriptType
 import org.bitcoinj.core.Transaction
-import org.bitcoinj.core.TransactionWitness
 import org.bitcoinj.crypto.ECKey
-import org.bitcoinj.script.ScriptBuilder
-import org.bitcoinj.script.ScriptPattern
 import org.json.JSONObject
 import org.sol4k.Base58
 import org.sol4k.Keypair as SolanaKeypair
@@ -26,10 +25,19 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 internal object NonEvmWallet {
-    fun address(mnemonic: String, chain: WalletChain): String = when (chain) {
-        WalletChain.BITCOIN -> bitcoinKey(mnemonic).toAddress(ScriptType.P2WPKH, BitcoinNetwork.MAINNET).toString()
+    fun publicKey(mnemonic: String, chain: WalletChain, bitcoinType: BitcoinAddressType = BitcoinAddressType.SEGWIT): ByteArray = when (chain) {
+        WalletChain.BITCOIN -> bitcoinKey(mnemonic, bitcoinType).pubKey
+        WalletChain.SOLANA -> Base58.decode(solanaKey(mnemonic).publicKey.toBase58())
+        WalletChain.TRON -> Numeric.hexStringToByteArray(tronKey(mnemonic).toPublicKey())
+        WalletChain.ZCASH -> zcashPublicKey(mnemonic)
+        else -> error("不支持的网络")
+    }
+
+    fun address(mnemonic: String, chain: WalletChain, bitcoinType: BitcoinAddressType = BitcoinAddressType.SEGWIT): String = when (chain) {
+        WalletChain.BITCOIN -> BitcoinSupport.address(bitcoinKey(mnemonic, bitcoinType), bitcoinType)
         WalletChain.SOLANA -> solanaKey(mnemonic).publicKey.toBase58()
         WalletChain.TRON -> tronKey(mnemonic).toBase58CheckAddress()
+        WalletChain.ZCASH -> ZcashSupport.address(zcashPublicKey(mnemonic))
         else -> error("不支持的网络")
     }
 
@@ -40,39 +48,44 @@ internal object NonEvmWallet {
         else -> error("不支持的请求类型")
     }
 
-    fun sign(request: SigningRequest.ChainTransaction, mnemonic: String): String = when (request.chain) {
-        WalletChain.BITCOIN -> signBitcoin(request, mnemonic)
+    fun sign(request: SigningRequest.ChainTransaction, mnemonic: String, bitcoinType: BitcoinAddressType = BitcoinAddressType.SEGWIT): String = when (request.chain) {
+        WalletChain.BITCOIN -> signBitcoin(request, mnemonic, bitcoinType)
         WalletChain.SOLANA -> signSolana(request, mnemonic)
         WalletChain.TRON -> signTron(request, mnemonic)
         else -> error("不支持的网络")
     }
 
-    private fun bitcoinKey(mnemonic: String): ECKey {
-        val privateKey = WalletEngine.privateKey(mnemonic, 0, 84)
-        return try { ECKey.fromPrivate(privateKey, true) } finally { privateKey.fill(0) }
+    internal fun bitcoinKey(mnemonic: String, type: BitcoinAddressType): ECKey {
+        val privateKey = WalletEngine.privateKey(mnemonic, 0, type.purpose)
+        return try { ECKey.fromPrivate(privateKey, true) } finally { SodiumMemory.wipe(privateKey) }
     }
 
     private fun tronKey(mnemonic: String): TronKeypair {
         val privateKey = WalletEngine.privateKey(mnemonic, 195)
-        return try { TronKeypair(Numeric.toHexStringNoPrefix(privateKey)) } finally { privateKey.fill(0) }
+        return try { TronKeypair(Numeric.toHexStringNoPrefix(privateKey)) } finally { SodiumMemory.wipe(privateKey) }
+    }
+
+    private fun zcashPublicKey(mnemonic: String): ByteArray {
+        val privateKey = WalletEngine.privateKey(mnemonic, 133)
+        return try { ECKey.fromPrivate(privateKey, true).pubKey } finally { SodiumMemory.wipe(privateKey) }
     }
 
     private fun solanaKey(mnemonic: String): SolanaKeypair {
         val seed = MnemonicUtils.generateSeed(mnemonic, "")
         var material = hmac("ed25519 seed".toByteArray(Charsets.US_ASCII), seed)
-        seed.fill(0)
+        SodiumMemory.wipe(seed)
         try {
             for (index in intArrayOf(44, 501, 0, 0)) {
                 val data = ByteBuffer.allocate(37).order(ByteOrder.BIG_ENDIAN)
                     .put(0).put(material, 0, 32).putInt(index or Int.MIN_VALUE).array()
                 val next = hmac(material.copyOfRange(32, 64), data)
-                material.fill(0)
-                data.fill(0)
+                SodiumMemory.wipe(material)
+                SodiumMemory.wipe(data)
                 material = next
             }
             val secret = material.copyOfRange(0, 32)
-            return try { SolanaKeypair.fromSecretKey(secret) } finally { secret.fill(0) }
-        } finally { material.fill(0) }
+            return try { SolanaKeypair.fromSecretKey(secret) } finally { SodiumMemory.wipe(secret) }
+        } finally { SodiumMemory.wipe(material) }
     }
 
     private fun hmac(key: ByteArray, data: ByteArray): ByteArray =
@@ -99,17 +112,19 @@ internal object NonEvmWallet {
         require(request.previousTransactions.size == tx.inputs.size) { "每个输入都需要对应的完整前序交易" }
         val prev = request.previousTransactions.map(::readBitcoin)
         var totalIn = 0L
-        val review = mutableListOf<Pair<String, String>>("类型" to "Bitcoin P2WPKH 交易", "版本" to tx.version.toString(), "Locktime" to tx.lockTime.toString())
+        val review = mutableListOf<Pair<String, String>>("类型" to "Bitcoin 交易", "版本" to tx.version.toString(), "Locktime" to tx.lockTime.toString())
+        val outpoints = mutableSetOf<String>()
         tx.inputs.forEachIndexed { index, input ->
             val old = prev[index]
             require(input.outpoint.hash() == old.txId) { "输入 ${index + 1} 的前序交易 ID 不匹配" }
             val n = input.outpoint.index()
+            require(outpoints.add("${old.txId}:$n")) { "交易包含重复输入" }
             require(n >= 0 && n < old.outputs.size) { "输入 ${index + 1} 的输出索引无效" }
             val output = old.outputs[n.toInt()]
-            require(ScriptPattern.isP2WPKH(output.scriptPubKey)) { "只支持 P2WPKH 输入" }
+            val type = BitcoinAddressType.fromScript(output.scriptPubKey)
             require(output.value.value > 0) { "输入 ${index + 1} 的金额无效" }
             totalIn = Math.addExact(totalIn, output.value.value)
-            review += "输入 ${index + 1}" to "${old.txId}:$n · ${output.value.toPlainString()} BTC · ${output.scriptPubKey.getToAddress(BitcoinNetwork.MAINNET)}"
+            review += "输入 ${index + 1}" to "${type.label} · ${old.txId}:$n · ${output.value.toPlainString()} BTC · ${output.scriptPubKey.getToAddress(BitcoinNetwork.MAINNET)}"
         }
         var totalOut = 0L
         tx.outputs.forEachIndexed { index, output ->
@@ -131,22 +146,23 @@ internal object NonEvmWallet {
         val request = SigningRequest.ChainTransaction(WalletChain.BITCOIN, json.getString("unsignedTransaction"),
             (0 until previous.length()).map(previous::getString), emptyList(),
             "Bitcoin 代币或脚本输出只显示原始脚本；请逐项核对全部输出及网络费用。")
-        return request.copy(review = bitcoinRequest(request).third)
+        val (tx, previousTxs, review) = bitcoinRequest(request)
+        val types = tx.inputs.mapIndexed { index, input ->
+            BitcoinAddressType.fromScript(previousTxs[index].outputs[input.outpoint.index().toInt()].scriptPubKey)
+        }.distinct()
+        require(types.size == 1) { "每次签名只支持同一种 Bitcoin 地址类型" }
+        return request.copy(review = listOf("地址类型" to types.single().label,
+            "派生路径" to types.single().derivationPath) + review, bitcoinAddressType = types.single())
     }
 
-    private fun signBitcoin(request: SigningRequest.ChainTransaction, mnemonic: String): String {
+    private fun signBitcoin(request: SigningRequest.ChainTransaction, mnemonic: String, type: BitcoinAddressType): String {
         val (tx, previous) = bitcoinRequest(request)
-        val key = bitcoinKey(mnemonic)
-        val ownScript = ScriptBuilder.createP2WPKHOutputScript(key)
-        tx.inputs.forEachIndexed { index, input ->
-            val output = previous[index].outputs[input.outpoint.index().toInt()]
-            require(output.scriptPubKey.program().contentEquals(ownScript.program())) { "输入 ${index + 1} 不属于当前钱包" }
-            val sig = tx.calculateWitnessSignature(index, key, ScriptBuilder.createP2PKHOutputScript(key),
-                output.value, Transaction.SigHash.ALL, false)
-            tx.replaceInput(index, input.withWitness(TransactionWitness.redeemP2WPKH(sig, key)))
-        }
+        val key = bitcoinKey(mnemonic, type)
+        val spent = tx.inputs.mapIndexed { index, input -> previous[index].outputs[input.outpoint.index().toInt()] }
+        tx.inputs.indices.forEach { BitcoinSupport.signInput(tx, spent, it, key, type) }
+        tx.inputs.indices.forEach { BitcoinSupport.verifyInput(tx, spent, it, key, type) }
         return JSONObject().put("type", "btc_transaction_result")
-            .put("from", key.toAddress(ScriptType.P2WPKH, BitcoinNetwork.MAINNET).toString())
+            .put("from", BitcoinSupport.address(key, type))
             .put("signedTransaction", Numeric.toHexString(tx.serialize())).toString()
     }
 
@@ -218,9 +234,23 @@ internal object NonEvmWallet {
             review += "指令 ${index + 1} · 程序" to instruction.program
             review += "指令 ${index + 1} · 账户" to instruction.accounts.joinToString("\n")
             review += "指令 ${index + 1} · 数据" to Numeric.toHexString(instruction.data)
+            if (instruction.program == "11111111111111111111111111111111" &&
+                instruction.data.size == 12 && ByteBuffer.wrap(instruction.data).order(ByteOrder.LITTLE_ENDIAN).int == 2 &&
+                instruction.accounts.size >= 2) {
+                val lamports = ByteBuffer.wrap(instruction.data, 4, 8).order(ByteOrder.LITTLE_ENDIAN).long
+                review += "指令 ${index + 1} · 接收地址" to instruction.accounts[1]
+                review += "指令 ${index + 1} · 转账金额" to "${lamports} lamports"
+            }
+            if (instruction.program in setOf("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") &&
+                instruction.data.size >= 9 && instruction.data[0].toInt() in setOf(3, 12)) {
+                val quantity = ByteBuffer.wrap(instruction.data, 1, 8).order(ByteOrder.LITTLE_ENDIAN).long
+                review += "指令 ${index + 1} · SPL 数量" to "$quantity 最小单位"
+                if (instruction.accounts.size >= 2) review += "指令 ${index + 1} · 目标代币账户" to
+                    instruction.accounts[if (instruction.data[0].toInt() == 12 && instruction.accounts.size >= 3) 2 else 1]
+            }
         }
         return SigningRequest.ChainTransaction(WalletChain.SOLANA, payload, review = review,
-            warning = "代币与合约指令按程序地址、账户和原始数据展示；无法从原始数据推断完整执行效果。")
+            warning = "常见转账指令会显示可识别字段；其他代币与合约指令仍需核对程序地址、账户和原始数据。")
     }
 
     private fun signSolana(request: SigningRequest.ChainTransaction, mnemonic: String): String {
@@ -271,6 +301,7 @@ internal object NonEvmWallet {
                 review += "合约地址" to tronAddress(value.contractAddress.toByteArray())
                 review += "附带 TRX" to "${value.callValue} SUN"
                 review += "调用数据" to Numeric.toHexString(value.data.toByteArray())
+                review += ContractReview.decode(Numeric.toHexString(value.data.toByteArray()), WalletChain.TRON)
                 tronAddress(value.ownerAddress.toByteArray())
             }
             else -> error("暂不支持此 TRON 合约类型：${contract.type}")
@@ -283,7 +314,7 @@ internal object NonEvmWallet {
         val payload = json.getString("transaction")
         val tx = tronTransaction(payload)
         return SigningRequest.ChainTransaction(WalletChain.TRON, payload, review = tx.review,
-            warning = "智能合约调用只展示原始数据；请核对合约地址及实际执行效果。")
+            warning = "常见代币调用会显示可识别字段；请核对合约地址、原始数据及实际执行效果。")
     }
 
     private fun signTron(request: SigningRequest.ChainTransaction, mnemonic: String): String {
